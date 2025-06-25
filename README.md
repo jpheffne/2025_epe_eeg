@@ -1,7 +1,7 @@
 # 2025_epe_eeg
-Behavioral data and analysis script for "Separable neural signals for reward and emotion prediction errors"
+Behavioral data and analysis script for "Separable neural signals for reward and emotion prediction errors". 
 
-The manuscript is published in Nature Communications at the following [doi to add]().
+The manuscript is published in Nature Communications at the following [doi to add]() and references an associated Zenodo [![DOI](https://zenodo.org/badge/1008435234.svg)](https://doi.org/10.5281/zenodo.15739721). 
 
 # Setup
 Clone repository or simply download in a zip file. 

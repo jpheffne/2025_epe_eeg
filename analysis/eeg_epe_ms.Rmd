@@ -1,0 +1,1205 @@
+---
+title: "EEG EPE Analysis (Manuscript)"
+author: "Joey Heffner"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+# Setup
+To run this analysis script you'll have to have the following packages installed (make sure `tidyverse` is updated): 
+
+| Packages1 | Packages2    | Packages3        | Packages4   |
+|:----------:|:-----------:|:----------------:|:-----------:|
+| `tidyverse`| `here`      | `janitor`        | `cowplot`   |
+| `lme4`     | `lmerTest`  | `marginaleffects`| `AICcmodavg`|
+| `car`      | `sjPlot`    | `viridis`        | `effsize`   |
+| `styler`   | `rmcorr`    | `rstatix`        |             |
+
+To install these packages simply use the `install.packages()` function and put each package name in as a string. 
+
+**Note**: If you've already used the `here()` function in another script, you will have to open a new instance of R to ensure the relative paths works for this script (or manually change the paths).
+
+The order of this Markdown will follow the order of results in the Manuscript which is published in Nature Communications at the following [DOI]().
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, message = FALSE)
+
+# Libraries
+library(tidyverse)       # tidy functions
+library(here)            # relative paths
+library(janitor)         # clean data types
+library(R.matlab)        # read mat files
+library(lme4)            # mixed-effects regression
+library(lmerTest)        # mixed-effects regressions
+library(marginaleffects) # marginal effects for regressions
+library(AICcmodavg)      # predictSE()
+library(car)             # VIF()
+library(sjPlot)          # tab_model()
+library(viridis)         # color scheme
+library(cowplot)         # plot_grid()
+library(styler)          # graph styles
+library(rmcorr)          # repeated measures correlation 
+library(rstatix)         # cohen's d
+library(effectsize)      # cohen's d
+
+# Relative paths
+dir_parent <- here()
+dir_data <- file.path(dir_parent, "data", "clean")
+dir_graphs <- file.path(dir_parent, "graphs")
+
+# Load data
+
+## Load behavioral
+df_ug <- read_csv(file.path(dir_data, "BEH_ug.csv"))
+
+## Load ERP components
+df_FRN_N2_offer <- read_csv(file.path(dir_data, "df_FRN_N2_offer.csv"))
+df_P2_offer     <- read_csv(file.path(dir_data, "df_P2_offer.csv"))
+df_P2_base      <- read_csv(file.path(dir_data, "df_P2_base.csv"))
+df_P3a_offer    <- read_csv(file.path(dir_data, "df_P3a_offer.csv"))
+df_P3a_base     <- read_csv(file.path(dir_data, "df_P3a_base.csv"))
+df_P3b_offer    <- read_csv(file.path(dir_data, "df_P3b_offer.csv"))
+df_P3b_base     <- read_csv(file.path(dir_data, "df_P3b_base.csv"))
+
+# Aesthetics
+partner_colors <- c("#6E689C", "#BA6239", "#489270")   # unfair, neutral, fair
+pe_colors      <- c("#EE6677", "#4477AA", "#228833")   # arousal, valence, reward
+```
+
+# Figures
+
+## Figure 2A - Valence and reward PEs predict choice differently across rounds
+
+This section includes: 
+- inline stats in **Reward and affective PEs have separable behavioral contributions to learning**
+- Table 1 **Separable effects of valence and reward PEs predict learning to punish**
+- Figure 2A **Valence and reward PEs predict choice differently across rounds**
+
+```{r fig2A}
+###### Inline stats ######
+fig2a_data <- df_ug %>% filter(!is.na(epe_valence_s))
+
+## Marginal effect of PEs predicting choice (all rounds)
+fig2a_model1 <- glmer(
+  formula = choice_num ~ epe_valence_s + epe_arousal_s + rpe_s +
+    (1 + epe_valence_s + epe_arousal_s + rpe_s | sub),
+  data = fig2a_data,
+  family = binomial(link = "logit"),
+  control = glmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig2a_model1)
+#vif(fig2a_model1)
+#confint(fig2a_model1, parm = "beta_", method = "profile")
+
+## Repeated measures correlation
+rmcorr(
+  participant = "sub", 
+  measure1 = "rpe_s", 
+  measure2 = "epe_valence_s", 
+  dataset = fig2a_data
+)
+
+
+###### Table 1 ######
+fig2a_model2 <- glmer(choice_num ~ epe_valence_s * trialLocal + epe_arousal_s * trialLocal + rpe_s * trialLocal + (1 + epe_valence_s + epe_arousal_s + rpe_s| sub),
+                      data = fig2a_data,
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)))
+summary(fig2a_model2)
+#confint(fig2a_model2, parm = "beta_", method = "profile")
+
+# Save table
+tab_model(fig2a_model2,
+          transform = NULL, title = "Separable effects of valence and reward PEs predict learning to punish",
+          pred.labels = c("Intercept", "Valence PE", "Round", "Arousal PE", "Reward PE", "Valence PE:Round", "Arousal PE:Round", "Reward PE:Round"),
+          dv.labels = c("Estimates"), string.est = "Log-Odds", string.se = "SE", string.stat = "Z",
+          show.se = TRUE, show.stat = TRUE, show.ci = FALSE, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE,
+          CSS = css_theme("regression"), file = file.path(dir_graphs, "tables", "fig2a_model2.html")
+)
+
+
+## Additional Stats 
+# TrialLocal - 1 for beta coefficients
+fig2a_model3 <- glmer(choice_num ~ epe_valence_s * trialLocal + epe_arousal_s * trialLocal + rpe_s * trialLocal + (1 + epe_valence_s + epe_arousal_s + rpe_s| sub),
+                      data = fig2a_data %>% mutate(trialLocal = trialLocal - 1),
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)))
+summary(fig2a_model3)
+
+fig2a_coefs <- fixef(fig2a_model3)
+fig2a_coefs_se <- sqrt(diag(vcov(fig2a_model3)))
+var1 <- "epe_valence_s"
+var2 <- "rpe_s"
+z_score <- (as.numeric(fig2a_coefs[var1]) - as.numeric(fig2a_coefs[var2])) / (sqrt(fig2a_coefs_se[var1]^2 + fig2a_coefs_se[var2]^2))
+pvalue <- pnorm(-abs(z_score))
+
+# TrialLocal - 5 for beta coefficients
+fig2a_model4 <- glmer(choice_num ~ epe_valence_s * trialLocal + epe_arousal_s * trialLocal + rpe_s * trialLocal + (1 + epe_valence_s + epe_arousal_s + rpe_s| sub),
+                      data = fig2a_data %>% mutate(trialLocal = trialLocal - 5),
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)
+                      )
+)
+summary(fig2a_model4)
+
+fig2a_coefs <- fixef(fig2a_model4)
+fig2a_coefs_se <- sqrt(diag(vcov(fig2a_model4)))
+var1 <- "epe_valence_s"
+var2 <- "rpe_s"
+z_score <- (as.numeric(fig2a_coefs[var1]) - as.numeric(fig2a_coefs[var2])) / (sqrt(fig2a_coefs_se[var1]^2 + fig2a_coefs_se[var2]^2))
+pvalue <- pnorm(-abs(z_score))
+
+
+###### Figure 2A ######
+x1_range <- seq(min(fig2a_data$epe_valence_s), max(fig2a_data$epe_valence_s), by = .1)
+x2_range <- seq(min(fig2a_data$epe_arousal_s), max(fig2a_data$epe_arousal_s), by = .1)
+x3_range <- seq(min(fig2a_data$rpe_s), max(fig2a_data$rpe_s), by = .1)
+x4_range <- seq(1, 5, 1)
+
+predict1 <- expand.grid(epe_valence_s = x1_range, epe_arousal_s = 0, rpe_s = 0, trialLocal = x4_range)
+predict2 <- expand.grid(epe_valence_s = 0, epe_arousal_s = x2_range, rpe_s = 0, trialLocal = x4_range)
+predict3 <- expand.grid(epe_valence_s = 0, epe_arousal_s = 0, rpe_s = x3_range, trialLocal = x4_range)
+
+predictedInterval1 <- data.frame(predictSE(fig2a_model2, newdata = predict1, type = "response", print.matrix = T))
+predictedInterval2 <- data.frame(predictSE(fig2a_model2, newdata = predict2, type = "response", print.matrix = T))
+predictedInterval3 <- data.frame(predictSE(fig2a_model2, newdata = predict3, type = "response", print.matrix = T))
+
+plot_data1 <- bind_cols(predict1, predictedInterval1) %>%
+  mutate(trialLocal = as.factor(trialLocal))
+plot_data2 <- bind_cols(predict2, predictedInterval2) %>%
+  mutate(trialLocal = as.factor(trialLocal))
+plot_data3 <- bind_cols(predict3, predictedInterval3) %>%
+  mutate(trialLocal = as.factor(trialLocal))
+
+# Valence PE
+fig2a_plot1 <- ggplot(plot_data1, aes(x = epe_valence_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "Valence PE") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Round", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Round", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+# Arousal PE
+fig2a_plot2 <- ggplot(plot_data2, aes(x = epe_arousal_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "Arousal PE") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Round", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Round", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+# Reward PE
+fig2a_plot3 <- ggplot(plot_data3, aes(x = rpe_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(linewidth = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "Reward PE") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Round", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Round", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+fig2a_plot <- plot_grid(fig2a_plot1, fig2a_plot2, fig2a_plot3, labels = c("A", "B", "C"), nrow = 1)
+fig2a_plot
+ggsave(filename = file.path(dir_graphs, "fig2a_plot.pdf"), plot = fig2a_plot, width = 20, height = 6, useDingbats = F)
+```
+
+## Figure 3A - Regression models of each ERP 
+
+This section includes:
+- inline stats for **Reward and affective PEs indexed by separate neural signals**
+- Figure 3A: Regression models of each ERP 
+- Figure 2B: Relationship between ERP and choice over round
+- Table 2: Only P3b predicts choices over rounds
+
+```{r fig3A}
+###### Dataframe ######
+fig3_data <- df_ug %>%
+  bind_cols(df_FRN_N2_offer) %>%
+  bind_cols(df_P2_offer) %>%
+  bind_cols(df_P2_base) %>%
+  bind_cols(df_P3a_offer) %>%
+  bind_cols(df_P3a_base) %>%
+  bind_cols(df_P3b_offer) %>%
+  bind_cols(df_P3b_base) %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(trial_label = case_when(
+    trialLocal == 1 ~ "Trial 1",
+    trialLocal == 2 ~ "Trial 2",
+    trialLocal == 3 ~ "Trial 3",
+    trialLocal == 4 ~ "Trial 4",
+    trialLocal == 5 ~ "Trial 5"
+  ))
+
+
+###### Inline statistics ######
+
+## Conditional models ##
+
+## FRN
+fig3a_model <- lmer(FRN_N2_offer_s ~  abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P2_offer_s + P2_base_offer_s + 
+                      (1 + abs_epe_arousal_s + P2_offer_s + P2_base_offer_s | sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3a_model)
+#confint(fig3a_model, parm = "beta_", method = "profile")
+
+### FRN Unconditional 
+fig3a_model1 <- lmer(FRN_N2_offer_s ~  abs_rpe_s + P2_offer_s + P2_base_offer_s + 
+                      (1 + P2_offer_s + P2_base_offer_s | sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3a_model1)
+
+fig3a_model2 <- lmer(FRN_N2_offer_s ~  abs_epe_valence_s + P2_offer_s + P2_base_offer_s + 
+                      (1 + P2_offer_s + P2_base_offer_s | sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3a_model2)
+
+fig3a_model3 <- lmer(FRN_N2_offer_s ~  abs_epe_arousal_s + P2_offer_s + P2_base_offer_s + 
+                      (1 + P2_offer_s + P2_base_offer_s | sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3a_model3)
+
+
+## P3a
+fig3b_model <- lmer(P3a_offer_s ~  abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P3a_base_offer_s + 
+                      (1 + abs_rpe_s + abs_epe_arousal_s + P3a_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3b_model)
+
+### P3a unconditional
+fig3b_model1 <- lmer(P3a_offer_s ~  abs_rpe_s + P3a_base_offer_s + 
+                      (1 + P3a_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3b_model1)
+
+
+fig3b_model2 <- lmer(P3a_offer_s ~  abs_epe_valence_s + P3a_base_offer_s + 
+                      (1 + P3a_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3b_model2)
+
+fig3b_model3 <- lmer(P3a_offer_s ~  abs_epe_arousal_s + P3a_base_offer_s + 
+                      (1 + P3a_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3b_model3)
+
+
+## P3b
+fig3c_model <- lmer(P3b_offer_s ~  abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P3b_base_offer_s + 
+                      (1 +  abs_rpe_s + P3b_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3c_model)
+#confint(fig3c_model, parm = "beta_", method = "profile")
+
+fig3c_coefs <- fixef(fig3c_model)
+fig3c_coefs_se <- sqrt(diag(vcov(fig3c_model)))
+var1 <- "abs_epe_valence_s"
+var2 <- "abs_rpe_s"
+z_score <- (as.numeric(fig3c_coefs[var1]) - as.numeric(fig3c_coefs[var2])) / (sqrt(fig3c_coefs_se[var1]^2 + fig3c_coefs_se[var2]^2))
+pvalue <- pnorm(-abs(z_score))
+
+
+### P3b unconditional
+fig3c_model1 <- lmer(P3b_offer_s ~  abs_rpe_s + P3b_base_offer_s + 
+                      (1 + P3b_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3c_model1)
+
+
+fig3c_model2 <- lmer(P3b_offer_s ~  abs_epe_valence_s + P3b_base_offer_s + 
+                      (1 + P3b_base_offer_s| sub),
+                    data = fig3_data, 
+                    control = lmerControl(
+                      optimizer = "bobyqa",
+                      optCtrl = list(maxfun = 2e5)))
+summary(fig3c_model2)
+
+# Beta comparison
+a <- fixef(fig3c_model1)['abs_rpe_s']
+a_se <- sqrt(diag(vcov(fig3c_model1)))['abs_rpe_s']
+b <- fixef(fig3c_model2)['abs_epe_valence_s']
+b_se <- sqrt(diag(vcov(fig3c_model2)))['abs_epe_valence_s']
+z_score <- (as.numeric(a) - as.numeric(b)) / (sqrt(a_se^2 + b_se^2))
+pvalue <- pnorm(-abs(z_score))
+
+
+###### Figure 3A ######
+models <- list(fig3a_model, fig3b_model, fig3c_model)
+erp_names <- c("FRN", "P3a", "P3b")
+
+# Define a function to extract coefficient info from each model
+extract_coefs <- function(model, erp_name) {
+  
+  # Extract info from model
+  coef_info <- summary(model)$coefficients
+  
+  # Create a data frame for the extracted info
+  data.frame(
+    erp = erp_name,
+    pe_type = c("Reward PE", "Valence PE", "Arousal PE"),
+    estimate = coef_info[c("abs_rpe_s", "abs_epe_valence_s", "abs_epe_arousal_s"), "Estimate"],
+    se = coef_info[c("abs_rpe_s", "abs_epe_valence_s", "abs_epe_arousal_s"), "Std. Error"],
+    p_value = coef_info[c("abs_rpe_s", "abs_epe_valence_s", "abs_epe_arousal_s"), "Pr(>|t|)"],
+    row.names = NULL
+  )
+}
+
+fig3_plot_data <- map2_dfr(
+  models, erp_names,
+  ~ extract_coefs(.x, .y)
+) %>%
+  mutate(
+    pe_type = fct_relevel(pe_type, "Reward PE", "Valence PE", "Arousal PE"),
+    p_labels = case_when(
+      p_value <= .001 ~ "***",
+      p_value <= .01 ~ "**",
+      p_value < .05 ~ "*",
+      p_value > .05 ~ "n.s."
+    ), 
+    p_y_pos = if_else(estimate > 0, estimate + se + 0.001, estimate - se - 0.001)
+  )
+
+# White space 
+white_space <- data.frame(erp = c("FRN", "P3a", "P3b"), 
+                          xmin = c(1,1,1), xmax = c(3,3,3), 
+                          ymin = c(-.05, -.025, -.025), ymax = c(0.05, 0.09, 0.09))
+
+# Plot
+fig3a_plot <- ggplot(fig3_plot_data, aes(x = pe_type, y = estimate, fill = pe_type)) + 
+  geom_rect(data = white_space, aes(x = NULL, y = NULL, fill = NULL, 
+                                    xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = "white", show.legend = F) +
+  geom_col() + 
+  geom_errorbar(aes(ymin = estimate - se, ymax = estimate + se), width = .1) + 
+  geom_text(aes(y = p_y_pos, label = p_labels), vjust = ifelse(fig3_plot_data$estimate > 0, -0.3, 1.3)) +
+  scale_x_discrete(name = "PE Type", labels = scales::label_wrap(2)) +
+  ylab("Beta estimate") + 
+  scale_color_manual(name = "Color", values = c("#228833", "#4477AA", "#EE6677")) +
+  scale_fill_manual(name = "Color", values = c("#228833", "#4477AA", "#EE6677")) + 
+  # Add 
+  facet_wrap(~erp, scale = "free") + 
+  theme_classic() + 
+  theme(text = element_text(size = 14))
+fig3a_plot
+ggsave(filename = file.path(dir_graphs, "fig3a_plot.pdf"), plot = fig3_plot, width = 8.5, height = 4)
+
+
+###### Table 2 ######
+fig2b_model <- glmer(choice_num ~ P3b_offer_s*trialLocal + P3a_offer_s*trialLocal + FRN_N2_offer_s*trialLocal + P2_offer_s*trialLocal + 
+                        (1 + P3a_offer_s| sub),
+                      data = fig3_data, 
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)))
+summary(fig2b_model)
+#confint(fig2b_model, parm = "beta_", method = "profile")
+tab_model(fig2b_model,
+          transform = NULL, title = "Only P3b predicts choices over rounds",
+          pred.labels = c("Intercept", "P3b", "Round", "P3a", "FRN", "P2", 
+                          "P3b:Round", "P3a:Round", "FRN:Round", "P2:Round"),
+          dv.labels = c("Estimates"), string.est = "Log-Odds", string.se = "SE", string.stat = "Z",
+          show.se = TRUE, show.stat = TRUE, show.ci = FALSE, show.re.var = F, show.r2 = F, show.icc = FALSE, 
+          CSS = css_theme("regression"), file = file.path(dir_graphs, "tables", "fig2b_model.html")
+)
+
+
+## Stats 
+# TrialLocal - 1 for beta coefficients
+fig2b_model3 <- glmer(choice_num ~ P3b_offer_s*trialLocal + P3a_offer_s*trialLocal + FRN_N2_offer_s*trialLocal + P2_offer_s*trialLocal + 
+                        (1 + P3a_offer_s| sub),
+                      data = fig3_data %>% mutate(trialLocal = trialLocal - 1),
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)
+                      )
+)
+summary(fig2b_model3)
+
+# TrialLocal - 5 for beta coefficients
+fig2b_model4 <-  glmer(choice_num ~ P3b_offer_s*trialLocal + P3a_offer_s*trialLocal + FRN_N2_offer_s*trialLocal + P2_offer_s*trialLocal + 
+                        (1 + P3a_offer_s| sub),
+                      data = fig3_data %>% mutate(trialLocal = trialLocal - 5),
+                      family = binomial(link = "logit"),
+                      control = glmerControl(
+                        optimizer = "bobyqa",
+                        optCtrl = list(maxfun = 2e5)
+                      )
+)
+summary(fig2b_model4)
+
+
+###### Figure 2B ######
+x1_range <- seq(min(fig3_data$P3b_offer_s, na.rm = T), max(fig3_data$P3b_offer_s, na.rm = T), by = .1)
+x2_range <- seq(min(fig3_data$P3a_offer_s, na.rm = T), max(fig3_data$P3a_offer_s, na.rm = T), by = .1)
+x3_range <- seq(min(fig3_data$FRN_N2_offer_s, na.rm = T), max(fig3_data$FRN_N2_offer_s, na.rm = T), by = .1)
+P2_avg <- mean(fig3_data$P2_offer_s, na.rm = T)
+x4_range <- seq(1, 5, 1)
+
+predict1 <- expand.grid(P3b_offer_s = x1_range, P3a_offer_s = 0, FRN_N2_offer_s = 0, 
+                        P2_offer_s = P2_avg, trialLocal = x4_range)
+predict2 <- expand.grid(P3b_offer_s = 0, P3a_offer_s = x2_range, FRN_N2_offer_s = 0, 
+                        P2_offer_s = P2_avg, trialLocal = x4_range)
+predict3 <- expand.grid(P3b_offer_s = 0, P3a_offer_s = 0, FRN_N2_offer_s = x3_range, 
+                        P2_offer_s = P2_avg, trialLocal = x4_range)
+
+predictedInterval1 <- data.frame(predictSE(fig2b_model, newdata = predict1, type = "response", print.matrix = T))
+predictedInterval2 <- data.frame(predictSE(fig2b_model, newdata = predict2, type = "response", print.matrix = T))
+predictedInterval3 <- data.frame(predictSE(fig2b_model, newdata = predict3, type = "response", print.matrix = T))
+
+plot_data1 <- bind_cols(predict1, predictedInterval1) %>% 
+  mutate(trialLocal = as.factor(trialLocal))
+plot_data2 <- bind_cols(predict2, predictedInterval2) %>% 
+  mutate(trialLocal = as.factor(trialLocal))
+plot_data3 <- bind_cols(predict3, predictedInterval3) %>% 
+  mutate(trialLocal = as.factor(trialLocal))
+
+
+## Plot
+# P3b
+fig2b_plot1 <- ggplot(plot_data1, aes(x = P3b_offer_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(size = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "P3b (offer)", trans = "reverse") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Trial", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Trial", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+# P3a
+fig2b_plot2 <- ggplot(plot_data2, aes(x = P3a_offer_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(size = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "P3a (offer)", trans = "reverse") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Trial", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Trial", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+# FRN
+fig2b_plot3 <- ggplot(plot_data3, aes(x = FRN_N2_offer_s, y = fit, color = trialLocal, fill = trialLocal)) +
+  geom_line(size = 1.5) +
+  geom_ribbon(aes(ymax = fit + se.fit, ymin = fit - se.fit), alpha = .2) +
+  scale_y_continuous(name = "p(Reject)", labels = scales::percent) +
+  scale_x_continuous(name = "FRN (offer)", trans = "reverse") +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_color_viridis(name = "Trial", discrete = TRUE, option = "D") +
+  scale_fill_viridis(name = "Trial", discrete = TRUE) +
+  theme_classic() +
+  theme(text = element_text(size = 30))
+
+fig2b_plot <- cowplot::plot_grid(fig2b_plot1, fig2b_plot2, fig2b_plot3, labels = c("A", "B", "C"), nrow = 1)
+fig2b_plot
+ggsave(filename = file.path(dir_graphs, "fig2b_plot.pdf"), plot = fig2b_plot, width = 18, height = 6, useDingbats = F)
+
+
+###### Inline statistics ######
+
+# Signed and absolute PEs
+
+## FRN
+frn_model_all <- lmer(FRN_N2_offer_s ~  rpe_s + epe_valence_s + epe_arousal_s + abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P2_base_offer_s + P2_offer_s + 
+                       (1 + abs_epe_arousal_s + P2_base_offer_s + P2_offer_s| sub),
+                     data = fig3_data, 
+                     control = lmerControl(
+                       optimizer = "bobyqa",
+                       optCtrl = list(maxfun = 2e5)))
+summary(frn_model_all)
+
+
+## P3a
+p3a_model_all <- lmer(P3a_offer_s ~  rpe_s + epe_valence_s + epe_arousal_s + abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P3a_base_offer_s + 
+                       (1 + epe_valence_s + abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P3a_base_offer_s| sub),
+                     data = fig3_data, 
+                     control = lmerControl(
+                       optimizer = "bobyqa",
+                       optCtrl = list(maxfun = 2e5)))
+summary(p3a_model_all)
+
+
+## P3b
+p3b_model_all <- lmer(P3b_offer_s ~  rpe_s + epe_valence_s + epe_arousal_s + abs_rpe_s + abs_epe_valence_s + abs_epe_arousal_s + P3b_base_offer_s + 
+                              (1 + abs_rpe_s + P3b_base_offer_s| sub),
+                     data = fig3_data, 
+                     control = lmerControl(
+                       optimizer = "bobyqa",
+                       optCtrl = list(maxfun = 2e5)))
+summary(p3b_model_all)
+#confint(p3b_model_all, parm = "beta_", method = "profile")
+```
+
+## Figure 4 - Learning in the Ultimatum Game
+
+This section includes:
+- inline stats for: **Reward and affective PEs resolved through different mechanisms**
+- Table 3: **Different mechanisms underlying resolution of reward and affective PEs**
+- Figure 4: **Learning in the Ultimatum Game**
+
+```{r fig4s}
+###### Figure 4a - Predictions over round ######
+fig4a_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, ep_valence, ep_arousal, rp) %>%
+  pivot_longer(cols = c("ep_valence", "ep_arousal", "rp"), names_to = "pred_type", values_to = "pred_value") %>%
+  group_by(sub, partnerType, trialLocal, pred_type) %>%
+  summarise(mean_sub_pred_value = mean(pred_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, pred_type) %>%
+  summarise(mean_pred_value = mean(mean_sub_pred_value), sd_pred_value = sd(mean_sub_pred_value),
+            n_pred_value = n(), se_pred_value = sd_pred_value / sqrt(n_pred_value), .groups = "keep") %>%
+  mutate(pred_labels = as.factor(case_when(pred_type == "ep_arousal" ~ "Arousal Pred",
+                                           pred_type == "ep_valence" ~ "Valence Pred",
+                                           pred_type == "rp" ~ "Reward Pred")), 
+         pred_labels = fct_relevel(pred_labels, "Reward Pred", "Valence Pred", "Arousal Pred"))
+
+fig4a_plot <- ggplot(fig4a_data, aes(x = trialLocal, y = mean_pred_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_pred_value - se_pred_value, ymax = mean_pred_value + se_pred_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~pred_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "Predictions (sc)") +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4a_plot
+ggsave(filename = file.path(dir_graphs, "fig4a_plot.pdf"), plot = fig4a_plot, width = 6, height = 3, useDingbats = F)
+
+
+###### Table 3 ######
+
+## Stats for round 1 - 2 updating
+fig4a_stats_updating <- df_ug %>%
+  filter(!is.na(rp)) %>%
+  filter(trialLocal %in% c(2, 1)) %>%
+  group_by(sub, trialLocal, partnerType) %>%
+  summarise(
+    ep_arousal = mean(ep_arousal, na.rm = TRUE),
+    ep_valence = mean(ep_valence, na.rm = TRUE),
+    rp = mean(rp, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  pivot_longer(
+    cols = c(ep_arousal, ep_valence, rp),
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  group_by(partnerType, measure) %>%
+  nest() %>%
+  mutate(
+    t_test_results = map(data, ~ {
+      val_trial2 <- .x$value[.x$trialLocal == 2]
+      val_trial1 <- .x$value[.x$trialLocal == 1]
+      
+      # T test
+      t_test_tidy = t.test(x = val_trial2, y = val_trial1, paired = TRUE) %>% tidy()
+      
+      # Cohen's D
+      cohens_d_result <- effsize::cohen.d(d = val_trial2, f = val_trial1, paired = TRUE)
+      
+      # Combine results
+      bind_cols(
+        t_test_tidy,
+        tibble(
+          cohens_d = cohens_d_result$estimate,
+          d_lower_ci = cohens_d_result$conf.int[1], # Lower CI of d
+          d_upper_ci = cohens_d_result$conf.int[2]  # Upper CI of d
+        )
+      )
+    })
+  ) %>%
+  unnest(t_test_results) %>%
+  select(
+    partnerType, measure, statistic, p.value, parameter, 
+    cohens_d, d_lower_ci, d_upper_ci
+  )
+#fig4a_stats_updating
+
+## Stats for rounds 2 - 5 update (expectations) 
+# (cycle through and replace terms as needed to fill out table)
+
+## Unfair partner valence updating
+fig4a_valence_unfair_model <- lmer(
+  ep_valence_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "bad", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_valence_unfair_model)
+confint(fig4a_valence_unfair_model, parm = "beta_", method = "profile")
+
+## Unfair partner arousal updating
+fig4a_arousal_unfair_model <- lmer(
+  ep_arousal_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "bad", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_arousal_unfair_model)
+confint(fig4a_arousal_unfair_model, parm = "beta_", method = "profile")
+
+## Unfair partner reward updating
+fig4a_reward_unfair_model <- lmer(
+  rp_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "bad", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_reward_unfair_model)
+confint(fig4a_reward_unfair_model, parm = "beta_", method = "profile")
+
+
+## Neutral partner valence updating
+fig4a_valence_neutral_model <- lmer(
+  ep_valence_s ~ trialLocal + (1|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "neutral", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_valence_neutral_model)
+confint(fig4a_valence_neutral_model, parm = "beta_", method = "profile")
+
+## Neutral partner arousal updating
+fig4a_arousal_neutral_model <- lmer(
+  ep_arousal_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "neutral", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_arousal_neutral_model)
+confint(fig4a_arousal_neutral_model, parm = "beta_", method = "profile")
+
+
+## Neutral partner reward updating
+fig4a_reward_neutral_model <- lmer(
+  rp_s ~ trialLocal + (1|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "neutral", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_reward_neutral_model)
+confint(fig4a_reward_neutral_model, parm = "beta_", method = "profile")
+
+
+## Fair partner valence updating
+fig4a_valence_fair_model <- lmer(
+  ep_valence_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "good", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_valence_fair_model)
+confint(fig4a_valence_fair_model, parm = "beta_", method = "profile")
+
+
+## Fair partner arousal updating
+fig4a_arousal_fair_model <- lmer(
+  ep_arousal_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "good", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_arousal_fair_model)
+confint(fig4a_arousal_fair_model, parm = "beta_", method = "profile")
+
+
+## Fair partner reward updating
+fig4a_reward_fair_model <- lmer(
+  rp_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% 
+    filter(partnerType == "good", trialLocal %in% c(2, 3, 4, 5)) %>%
+    mutate(trialLocal = trialLocal - 2),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_reward_fair_model)
+confint(fig4a_reward_fair_model, parm = "beta_", method = "profile")
+
+
+###### Figure 4B - Experience over Round ######
+fig4b_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, exp_valence, exp_arousal, offer) %>%
+  pivot_longer(cols = c("exp_valence", "exp_arousal", "offer"), names_to = "exp_type", values_to = "exp_value") %>%
+  group_by(sub, partnerType, trialLocal, exp_type) %>%
+  summarise(mean_sub_exp_value = mean(exp_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, exp_type) %>%
+  summarise(mean_exp_value = mean(mean_sub_exp_value), sd_exp_value = sd(mean_sub_exp_value),
+            n_exp_value = n(), se_exp_value = sd_exp_value / sqrt(n_exp_value), .groups = "keep") %>%
+  mutate(exp_labels = as.factor(case_when(exp_type == "exp_arousal" ~ "Arousal Exp",
+                                          exp_type == "exp_valence" ~ "Valence Exp",
+                                          exp_type == "offer" ~ "Offer")), 
+         exp_labels = fct_relevel(exp_labels, "Offer", "Valence Exp", "Arousal Exp"))
+
+
+fig4b_plot <- ggplot(fig4b_data, aes(x = trialLocal, y = mean_exp_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_exp_value - se_exp_value, ymax = mean_exp_value + se_exp_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~exp_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "Experience (sc)") +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4b_plot
+ggsave(filename = file.path(dir_graphs, "fig4b_plot.pdf"), plot = fig4b_plot, width = 6, height = 3, useDingbats = F)
+
+
+###### Table 3 ######
+
+## Stats for round 1 - 5 experience changing
+
+## Valence Unfair Experience
+fig4b_valence_unfair_model <- lmer(
+  exp_valence_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% filter(partnerType == "bad"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_valence_unfair_model)
+confint(fig4b_valence_unfair_model, parm = "beta_", method = "profile")
+
+## Arousal Unfair Experience
+fig4b_arousal_unfair_model <- lmer(
+  exp_arousal_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% filter(partnerType == "bad"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_arousal_unfair_model)
+confint(fig4b_arousal_unfair_model, parm = "beta_", method = "profile")
+
+## Valence Neutral Experience
+fig4b_valence_neutral_model <- lmer(
+  exp_valence_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% filter(partnerType == "neutral"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_valence_neutral_model)
+confint(fig4b_valence_neutral_model, parm = "beta_", method = "profile")
+
+## Arousal Neutral Experience
+fig4b_arousal_neutral_model <- lmer(
+  exp_arousal_s ~ trialLocal + (1|sub), 
+  data = df_ug %>% filter(partnerType == "neutral"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_arousal_neutral_model)
+confint(fig4b_arousal_neutral_model, parm = "beta_", method = "profile")
+
+
+## Valence Fair Experience
+fig4b_valence_fair_model <- lmer(
+  exp_valence_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% filter(partnerType == "good"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_valence_fair_model)
+confint(fig4b_valence_fair_model, parm = "beta_", method = "profile")
+
+
+## Arousal Fair Experience
+fig4b_arousal_fair_model <- lmer(
+  exp_arousal_s ~ trialLocal + (1 + trialLocal|sub), 
+  data = df_ug %>% filter(partnerType == "good"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_arousal_fair_model)
+confint(fig4b_arousal_fair_model, parm = "beta_", method = "profile")
+
+
+###### Figure 4c - Prediction Errors over rounds ######
+fig4c_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, epe_valence, epe_arousal, rpe) %>%
+  pivot_longer(cols = c("epe_valence", "epe_arousal", "rpe"), names_to = "pe_type", values_to = "pe_value") %>%
+  group_by(sub, partnerType, trialLocal, pe_type) %>%
+  summarise(mean_sub_pe_value = mean(pe_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, pe_type) %>%
+  summarise(mean_pe_value = mean(mean_sub_pe_value), sd_pe_value = sd(mean_sub_pe_value),
+            n_pe_value = n(), se_pe_value = sd_pe_value / sqrt(n_pe_value), .groups = "keep") %>%
+  mutate(pe_labels = as.factor(case_when(pe_type == "epe_arousal" ~ "Arousal PE",
+                                         pe_type == "epe_valence" ~ "Valence PE",
+                                         pe_type == "rpe" ~ "Reward PE")), 
+         pe_labels = fct_relevel(pe_labels, "Reward PE", "Valence PE", "Arousal PE"))
+
+
+fig4c_plot <- ggplot(fig4c_data, aes(x = trialLocal, y = mean_pe_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_pe_value - se_pe_value, ymax = mean_pe_value + se_pe_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~pe_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "PE (scaled)") +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4c_plot
+ggsave(filename = file.path(dir_graphs, "fig4c_plot.pdf"), plot = fig4c_plot, width = 6, height = 3, useDingbats = F)
+
+
+# Figure 4c stats
+fig4c_data_tests <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  select(sub, trialLocal, partnerType, epe_valence_s, epe_arousal_s, rpe_s) %>%
+  pivot_longer(cols = c("epe_valence_s", "epe_arousal_s", "rpe_s"), names_to = "pe_type", values_to = "pe_value") %>%
+  group_by(sub, partnerType, trialLocal, pe_type) %>%
+  summarise(mean_sub_pe_value = mean(pe_value), .groups = "drop") 
+  
+
+## Round t-tests
+round <- 5
+fig4c_tests1 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "rpe_s", partnerType == "bad") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests2 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "rpe_s", partnerType == "neutral") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests3 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "rpe_s", partnerType == "good") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests4 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_valence_s", partnerType == "bad") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests5 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_valence_s", partnerType == "neutral") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests6 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_valence_s", partnerType == "good") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests7 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_arousal_s", partnerType == "bad") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests8 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_arousal_s", partnerType == "neutral") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests9 <- fig4c_data_tests %>%
+  filter(trialLocal == round, pe_type == "epe_arousal_s", partnerType == "good") %>%
+  t_test(mean_sub_pe_value ~ 0, ref.group = "0", paired = F) %>%
+  add_significance()
+
+fig4c_tests_all <- bind_rows(fig4c_tests1, fig4c_tests2, fig4c_tests3, 
+                             fig4c_tests4, fig4c_tests5, fig4c_tests6, 
+                             fig4c_tests7, fig4c_tests8, fig4c_tests9)
+fig4c_tests_all
+
+
+## Figure 4d - Reward 
+fig4d_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, rp, offer, rpe) %>%
+  pivot_longer(cols = c("rp", "offer", "rpe"), names_to = "pred_type", values_to = "pred_value") %>%
+  group_by(sub, partnerType, trialLocal, pred_type) %>%
+  summarise(mean_sub_pred_value = mean(pred_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, pred_type) %>%
+  summarise(mean_pred_value = mean(mean_sub_pred_value), sd_pred_value = sd(mean_sub_pred_value),
+            n_pred_value = n(), se_pred_value = sd_pred_value / sqrt(n_pred_value), .groups = "keep") %>%
+  mutate(pred_labels = as.factor(case_when(pred_type == "rp" ~ "Reward Pred",
+                                           pred_type == "offer" ~ "Offer",
+                                           pred_type == "rpe" ~ "Reward PE")), 
+         pred_labels = fct_relevel(pred_labels, "Offer", "Reward Pred", "Reward PE"))
+
+double_zero <- function(l) {
+  # Function adds n 0s to end of label for balancing spacing across graphs
+  l <- as.character(l)
+  l <- str_c("00", l)
+  return(l)
+}
+
+single_zero <- function(l) {
+  # Function adds n 0s to end of label for balancing spacing across graphs
+  l <- as.character(l)
+  l <- str_c("0", l)
+  return(l)
+}
+
+fig4d_plot <- ggplot(fig4d_data, aes(x = trialLocal, y = mean_pred_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_pred_value - se_pred_value, ymax = mean_pred_value + se_pred_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~pred_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "Reward", labels = double_zero) +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4d_plot
+ggsave(filename = file.path(dir_graphs, "fig4d_plot.pdf"), plot = fig4d_plot, width = 8, height = 3, useDingbats = F)
+
+## Figure 4e - Valence 
+fig4e_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, ep_valence, exp_valence, epe_valence) %>%
+  pivot_longer(cols = c("ep_valence", "exp_valence", "epe_valence"), names_to = "pred_type", values_to = "pred_value") %>%
+  group_by(sub, partnerType, trialLocal, pred_type) %>%
+  summarise(mean_sub_pred_value = mean(pred_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, pred_type) %>%
+  summarise(mean_pred_value = mean(mean_sub_pred_value), sd_pred_value = sd(mean_sub_pred_value),
+            n_pred_value = n(), se_pred_value = sd_pred_value / sqrt(n_pred_value), .groups = "keep") %>%
+  mutate(pred_labels = as.factor(case_when(pred_type == "ep_valence" ~ "Valence Pred",
+                                           pred_type == "exp_valence" ~ "Valence Exp",
+                                           pred_type == "epe_valence" ~ "Valence PE")), 
+         pred_labels = fct_relevel(pred_labels, "Valence Exp", "Valence Pred", "Valence PE"))
+
+fig4e_plot <- ggplot(fig4e_data, aes(x = trialLocal, y = mean_pred_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_pred_value - se_pred_value, ymax = mean_pred_value + se_pred_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~pred_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "Valence") +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4e_plot
+ggsave(filename = file.path(dir_graphs, "fig4e_plot.pdf"), plot = fig4e_plot, width = 8, height = 3, useDingbats = F)
+
+## Figure 4f - Arousal 
+fig4f_data <- df_ug %>%
+  filter(!is.na(epe_valence_s)) %>%
+  mutate(partnerType = fct_relevel(partnerType, "bad", "neutral", "good")) %>%
+  select(sub, trialLocal, partnerType, ep_arousal, exp_arousal, epe_arousal) %>%
+  pivot_longer(cols = c("ep_arousal", "exp_arousal", "epe_arousal"), names_to = "pred_type", values_to = "pred_value") %>%
+  group_by(sub, partnerType, trialLocal, pred_type) %>%
+  summarise(mean_sub_pred_value = mean(pred_value), .groups = "keep") %>%
+  group_by(partnerType, trialLocal, pred_type) %>%
+  summarise(mean_pred_value = mean(mean_sub_pred_value), sd_pred_value = sd(mean_sub_pred_value),
+            n_pred_value = n(), se_pred_value = sd_pred_value / sqrt(n_pred_value), .groups = "keep") %>%
+  mutate(pred_labels = as.factor(case_when(pred_type == "ep_arousal" ~ "Arousal Pred",
+                                           pred_type == "exp_arousal" ~ "Arousal Exp",
+                                           pred_type == "epe_arousal" ~ "Arousal PE")), 
+         pred_labels = fct_relevel(pred_labels, "Arousal Exp", "Arousal Pred", "Arousal PE"))
+
+fig4f_plot <- ggplot(fig4f_data, aes(x = trialLocal, y = mean_pred_value, color = partnerType)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = mean_pred_value - se_pred_value, ymax = mean_pred_value + se_pred_value), width = .1) +
+  #geom_hline(aes(yintercept = 0), linetype = "dotted") +
+  facet_wrap(~pred_labels, scales = "free") +
+  scale_color_manual(values = partner_colors) +
+  scale_y_continuous(name = "Arousal", labels = single_zero) +
+  scale_x_continuous(name = "Round") +
+  theme_classic() +
+  theme(text = element_text(size = 16))
+fig4f_plot
+ggsave(filename = file.path(dir_graphs, "fig4f_plot.pdf"), plot = fig4f_plot, width = 8, height = 3, useDingbats = F)
+
+
+###### Inline interaction tests ######
+fig4a_interaction_data1 <- df_ug %>%
+  filter(!is.na(rp_s)) %>%
+  filter(trialLocal %in% c(2, 3, 4, 5)) %>%
+  select(sub, trialLocal, partnerType, rp_s, ep_valence_s, ep_arousal_s) %>% 
+  pivot_longer(cols = c(rp_s, ep_valence_s, ep_arousal_s), names_to = "measure", values_to = "value")
+
+## Reward vs valence Fair
+fig4a_interaction_model1 <- lmer(
+  value ~ trialLocal*measure + (1 + trialLocal + measure|sub), 
+  data = fig4a_interaction_data1 %>% 
+    filter(measure %in% c("rp_s", "ep_valence_s"), partnerType == "good"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_interaction_model1)
+
+
+## Reward vs valence Neutral
+fig4a_interaction_model2 <- lmer(
+  value ~ trialLocal*measure + (1 + measure|sub), 
+  data = fig4a_interaction_data1 %>% 
+    filter(measure %in% c("rp_s", "ep_valence_s"), partnerType == "neutral"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_interaction_model2)
+
+
+## Reward vs valence Unfair
+fig4a_interaction_model3 <- lmer(
+  value ~ trialLocal*measure + (1 + measure|sub), 
+  data = fig4a_interaction_data1 %>% 
+    filter(measure %in% c("rp_s", "ep_valence_s"), partnerType == "bad"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4a_interaction_model3)
+
+# Experience
+fig4b_interaction_data2 <- df_ug %>%
+  filter(!is.na(rp_s)) %>%
+  filter(trialLocal %in% c(1, 2, 3, 4, 5)) %>%
+  select(sub, trialLocal, partnerType, offer_s, exp_valence_s, exp_arousal_s) %>% 
+  pivot_longer(cols = c(offer_s, exp_valence_s, exp_arousal_s), names_to = "measure", values_to = "value")
+
+## Reward vs valence Fair
+fig4b_interaction_model1 <- lmer(
+  value ~ trialLocal*measure + (1|sub), 
+  data = fig4b_interaction_data2 %>% 
+    filter(measure %in% c("offer_s", "exp_valence_s"), partnerType == "good"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_interaction_model1)
+
+
+## Reward vs valence Neutral
+fig4b_interaction_model2 <- lmer(
+  value ~ trialLocal*measure + (1|sub), 
+  data = fig4b_interaction_data2 %>% 
+    filter(measure %in% c("offer_s", "exp_valence_s"), partnerType == "neutral"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_interaction_model2)
+
+
+## Reward vs valence Unfair
+fig4b_interaction_model3 <- lmer(
+  value ~ trialLocal*measure + (1|sub), 
+  data = fig4b_interaction_data2 %>% 
+    filter(measure %in% c("offer_s", "exp_valence_s"), partnerType == "bad"),
+  control = lmerControl(
+    optimizer = "bobyqa",
+    optCtrl = list(maxfun = 2e5)
+  )
+)
+summary(fig4b_interaction_model3)
+```
